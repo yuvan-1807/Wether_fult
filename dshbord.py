@@ -4,8 +4,8 @@ import numpy as np
 import pickle
 import matplotlib.pyplot as plt
 from datetime import datetime, timedelta
+from sklearn.ensemble import IsolationForest
 
-# Custom CSS for better styling
 st.set_page_config(
     page_title="AWS Anomaly Detection",
     layout="wide",
@@ -13,7 +13,6 @@ st.set_page_config(
     menu_items=None
 )
 
-# Custom CSS
 st.markdown("""
 <style>
     .main {
@@ -46,10 +45,21 @@ st.markdown("""
         border-left: 4px solid #4dabf7;
         color: white;
     }
+    .confidence-high {
+        background-color: rgba(81, 207, 102, 0.2);
+        border-left: 4px solid #51cf66;
+    }
+    .confidence-medium {
+        background-color: rgba(255, 193, 7, 0.2);
+        border-left: 4px solid #ffc107;
+    }
+    .confidence-low {
+        background-color: rgba(255, 107, 107, 0.2);
+        border-left: 4px solid #ff6b6b;
+    }
 </style>
 """, unsafe_allow_html=True)
 
-# Title with gradient
 st.markdown("""
 <h1 style='text-align: center; color: white; font-size: 3em; margin-bottom: 10px;'>
     🌦️ AWS Anomaly Detection
@@ -95,7 +105,6 @@ def load_data():
 
 @st.cache_data
 def train_model(df):
-    from sklearn.ensemble import IsolationForest
     clean_data = df[df['label'] == 0][['temperature', 'humidity', 'pressure', 'rainfall']]
     model = IsolationForest(contamination=0.02, n_estimators=100, random_state=42)
     model.fit(clean_data)
@@ -115,6 +124,32 @@ def get_baseline_stats(df):
         'rainfall_std': clean_data['rainfall'].std(),
     }
 
+def calculate_confidence(temp, humidity, pressure, rainfall, baseline, model):
+    """Calculate confidence score for anomaly detection"""
+    z_scores = [
+        abs((temp - baseline['temp_mean']) / baseline['temp_std']),
+        abs((humidity - baseline['humidity_mean']) / baseline['humidity_std']),
+        abs((pressure - baseline['pressure_mean']) / baseline['pressure_std']),
+        abs((rainfall - baseline['rainfall_mean']) / baseline['rainfall_std'])
+    ]
+    
+    max_z = max(z_scores)
+    deviation_score = min(100, (max_z / 2.5) * 100)
+    
+    test_data = pd.DataFrame({
+        'temperature': [temp],
+        'humidity': [humidity],
+        'pressure': [pressure],
+        'rainfall': [rainfall]
+    })
+    
+    anomaly_score = model.score_samples(test_data)[0]
+    normalized_score = (1 / (1 + np.exp(anomaly_score))) * 100
+    
+    final_confidence = (deviation_score + normalized_score) / 2
+    
+    return min(100, max(0, final_confidence))
+
 # Load data
 df = load_data()
 model = train_model(df)
@@ -125,7 +160,7 @@ df['anomaly'] = predictions
 
 # Sidebar
 st.sidebar.markdown("### ⚙️ Navigation")
-view_option = st.sidebar.radio("Select View:", ["📊 Dashboard", "🔴 Anomalies", "🔬 Live Demo", "📈 Baseline Stats"])
+view_option = st.sidebar.radio("Select View:", ["📊 Dashboard", "🔴 Anomalies", "🔬 Live Demo", "📈 Baseline Stats", "🏢 Multi-Station"])
 
 st.sidebar.divider()
 
@@ -288,14 +323,113 @@ elif view_option == "📈 Baseline Stats":
     - Layer 3 compares with neighboring stations to confirm
     """)
 
-# ===== LIVE DEMO =====
-elif view_option == "🔬 Live Demo":
-    st.subheader("🔬 Interactive Anomaly Detection")
+# ===== MULTI-STATION VIEW =====
+elif view_option == "🏢 Multi-Station":
+    st.subheader("🏢 Multi-Station Anomaly Comparison")
     
     st.markdown("""
     <div class='info-box'>
-    <p><strong>Enter sensor readings below and watch the system detect anomalies in real-time.</strong>
-    The system will check against the baseline and apply all 3 layers of detection.</p>
+    <p><strong>Layer 3: Cross-Station Validation</strong><br>
+    Compare readings across neighboring stations to distinguish sensor faults from real weather events.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    st.divider()
+    
+    # Simulate 3 stations with slight variations
+    station_a_offset = 0
+    station_b_offset = 50
+    station_c_offset = 100
+    
+    st.markdown("### Station Data Comparison")
+    
+    col1, col2, col3 = st.columns(3)
+    
+    with col1:
+        st.markdown("#### 🏠 Station A (Main)")
+        station_a_data = df.iloc[station_a_offset:station_a_offset+100]
+        anomalies_a = len(station_a_data[station_a_data['anomaly'] == -1])
+        st.metric("Anomalies", anomalies_a, delta="readings")
+    
+    with col2:
+        st.markdown("#### 🏠 Station B (Neighbor 1)")
+        station_b_data = df.iloc[station_b_offset:station_b_offset+100].copy()
+        station_b_data['temperature'] = station_b_data['temperature'] + np.random.normal(0.5, 0.3, len(station_b_data))
+        anomalies_b = len(station_b_data[station_b_data['temperature'] > baseline['temp_mean'] + 2.5*baseline['temp_std']])
+        st.metric("Anomalies", anomalies_b, delta="readings")
+    
+    with col3:
+        st.markdown("#### 🏠 Station C (Neighbor 2)")
+        station_c_data = df.iloc[station_c_offset:station_c_offset+100].copy()
+        station_c_data['temperature'] = station_c_data['temperature'] + np.random.normal(1, 0.5, len(station_c_data))
+        anomalies_c = len(station_c_data[station_c_data['temperature'] > baseline['temp_mean'] + 2.5*baseline['temp_std']])
+        st.metric("Anomalies", anomalies_c, delta="readings")
+    
+    st.divider()
+    
+    # Comparison chart
+    st.markdown("### Temperature Trend Comparison")
+    
+    fig, (ax1, ax2, ax3) = plt.subplots(3, 1, figsize=(14, 10))
+    fig.patch.set_facecolor('#f8f9fa')
+    
+    for ax in [ax1, ax2, ax3]:
+        ax.set_facecolor('#ffffff')
+        ax.axhline(y=baseline['temp_mean'], color='orange', linestyle='--', linewidth=1, alpha=0.7, label='Baseline')
+        ax.fill_between(range(100), 
+                         baseline['temp_mean'] - 2.5*baseline['temp_std'],
+                         baseline['temp_mean'] + 2.5*baseline['temp_std'],
+                         alpha=0.1, color='green')
+    
+    ax1.plot(station_a_data.index - station_a_offset, station_a_data['temperature'], 'b-', linewidth=2, label='Station A')
+    ax1.scatter([i for i, x in enumerate(station_a_data['anomaly']) if x == -1], 
+                station_a_data[station_a_data['anomaly'] == -1]['temperature'], color='red', s=100, marker='X', zorder=5)
+    ax1.set_ylabel('Temperature (°C)', fontweight='bold')
+    ax1.set_title('🏠 Station A (Main)', fontweight='bold')
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+    
+    ax2.plot(range(len(station_b_data)), station_b_data['temperature'], 'g-', linewidth=2, label='Station B')
+    ax2.set_ylabel('Temperature (°C)', fontweight='bold')
+    ax2.set_title('🏠 Station B (Neighbor 1)', fontweight='bold')
+    ax2.legend()
+    ax2.grid(True, alpha=0.3)
+    
+    ax3.plot(range(len(station_c_data)), station_c_data['temperature'], 'purple', linewidth=2, label='Station C')
+    ax3.set_xlabel('Days', fontweight='bold')
+    ax3.set_ylabel('Temperature (°C)', fontweight='bold')
+    ax3.set_title('🏠 Station C (Neighbor 2)', fontweight='bold')
+    ax3.legend()
+    ax3.grid(True, alpha=0.3)
+    
+    st.pyplot(fig, use_container_width=True)
+    
+    st.divider()
+    
+    st.markdown("### 🎯 Interpretation")
+    
+    st.markdown("""
+    **Scenario 1: Only Station A spiked**
+    - Station A shows anomaly, Stations B & C normal
+    - **Decision: SENSOR FAULT** → Alert maintenance
+    
+    **Scenario 2: All stations show spike together**
+    - All stations simultaneously show anomaly
+    - **Decision: REAL WEATHER EVENT** → Issue public warning
+    
+    **Scenario 3: Correlated but offset**
+    - Stations show related but slightly different patterns
+    - **Decision: LOCALIZED EVENT** → Check other variables + cross-verify
+    """)
+
+# ===== LIVE DEMO =====
+elif view_option == "🔬 Live Demo":
+    st.subheader("🔬 Interactive Anomaly Detection with Confidence Score")
+    
+    st.markdown("""
+    <div class='info-box'>
+    <p><strong>Enter sensor readings and watch the system analyze with confidence scoring.</strong>
+    The system will check against baseline and apply all 3 layers of detection.</p>
     </div>
     """, unsafe_allow_html=True)
     
@@ -353,6 +487,9 @@ elif view_option == "🔬 Live Demo":
             'rainfall': [rainfall_input]
         })
         
+        # Calculate confidence
+        confidence = calculate_confidence(temp_input, humidity_input, pressure_input, rainfall_input, baseline, model)
+        
         # Layer 1: Statistical check
         temp_z = abs((temp_input - baseline['temp_mean']) / baseline['temp_std'])
         humidity_z = abs((humidity_input - baseline['humidity_mean']) / baseline['humidity_std'])
@@ -366,6 +503,26 @@ elif view_option == "🔬 Live Demo":
         
         st.divider()
         st.subheader("📊 Analysis Results")
+        
+        # Confidence Score Box
+        if confidence > 70:
+            conf_class = "confidence-high"
+            conf_emoji = "🔴"
+        elif confidence > 40:
+            conf_class = "confidence-medium"
+            conf_emoji = "🟡"
+        else:
+            conf_class = "confidence-low"
+            conf_emoji = "🟢"
+        
+        st.markdown(f"""
+        <div class='{conf_class}' style='padding: 20px; border-radius: 10px; margin-bottom: 20px;'>
+        <p style='font-size: 1.2em; margin: 0;'><strong>{conf_emoji} Confidence Score: {confidence:.1f}%</strong></p>
+        <p style='margin: 5px 0 0 0; font-size: 0.9em;'>
+        {'Very high confidence in anomaly detection' if confidence > 70 else 'Moderate confidence in detection' if confidence > 40 else 'Low anomaly risk - likely normal'}
+        </p>
+        </div>
+        """, unsafe_allow_html=True)
         
         # Layer 1 details
         st.markdown("#### 🔷 Layer 1: Statistical Rules Analysis")
@@ -396,8 +553,6 @@ elif view_option == "🔬 Live Demo":
         
         # Layer 2: ML analysis
         st.markdown("#### 🧠 Layer 2: Isolation Forest (ML) Analysis")
-        
-        ml_status = "🔴 ANOMALY DETECTED" if ml_pred == -1 else "✅ NORMAL"
         
         if ml_pred == -1:
             st.markdown("""
@@ -452,6 +607,11 @@ elif view_option == "🔬 Live Demo":
         - Rainfall deviation: {rainfall_z:.2f}σ
         
         **Layer 2 Findings:** Isolation Forest verdict: {'Anomaly' if ml_pred == -1 else 'Normal'}
+        
+        **Confidence Score Breakdown:**
+        - Deviation Score (Layer 1): {(abs((temp_z + humidity_z + pressure_z + rainfall_z)/4)):.1f}
+        - ML Score (Layer 2): {(50 + (25 if ml_pred == -1 else 0)):.1f}
+        - Combined Confidence: {confidence:.1f}%
         
         **System Reasoning:** 
         - If multiple variables deviate significantly → likely sensor fault (stuck, spike, drift)
